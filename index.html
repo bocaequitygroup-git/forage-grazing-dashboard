@@ -323,6 +323,7 @@ async function loadData(){
     p.upcomingEntry = parseDate(o['upcoming entry date (h)']) || p.grDate;
     p.lastHt = (o['last measured height (in)']||'').trim();
     p.lastDate = o['last measured date'] || '';
+    p.lastDateParsed = parseDate(p.lastDate);
     p.htBelowFlag = isTrue(o['height below target flag (h)']);
     p.poultryActive = isTrue(o['poultry active? (h)']);
     p.restExtFlag = isTrue(o['rest extended flag (h)']);
@@ -335,6 +336,7 @@ async function loadData(){
     p.cls = meta.cls;
     p.decision = meta.decision;
     p.daysSince = p.grDate ? Math.round((TODAY - p.grDate)/86400000) : null;
+    p.loggedSinceReady = !!(p.lastDateParsed && p.grDate && p.lastDateParsed >= p.grDate);
     return p;
   }).sort((a,b)=>a.pod-b.pod);
 
@@ -389,9 +391,11 @@ function renderQueue(){
   document.getElementById('queueBody').innerHTML = ready.map(p=>{
     const ht = p.lastHt ? p.lastHt+'"' : 'No Data';
     const overRest = p.daysSince!=null && p.daysSince > Math.ceil(p.rest*1.5);
+    const neverLogged = !p.loggedSinceReady;
     const readyFlag = p.htBelowFlag ? '⚠️' : '✅';
     const note = p.restExtFlag ? '⚠️ Rest Extended override'
       : p.replantFlag ? '⚠️ Replant Needed override'
+      : (overRest && neverLogged) ? '🕓 Not logged — status may be stale'
       : overRest ? '⚠️ Over-rest risk'
       : p.htBelowFlag ? '⚠️ Height below target' : 'Ready';
     return `<tr style="cursor:pointer" onclick="podModal(${p.pod})">
@@ -439,8 +443,10 @@ function renderPodGrid(){
 
 /* ---------- 5. Alerts ---------- */
 const SEV_COLOR = { red:'var(--red)', purple:'var(--purple)', blue:'var(--blue)', orange:'var(--orange)', yellow:'var(--yellow)' };
+let staleAlertsExpanded = false;
+function toggleStaleAlerts(){ staleAlertsExpanded = !staleAlertsExpanded; renderAlerts(); }
 function renderAlerts(){
-  const alerts=[];
+  const alerts=[]; const staleGroup=[];
   PODS.forEach(p=>{
     if(p.replantFlag) alerts.push({pod:p,sev:'red',t:'Replant Needed (override)',d:`Pod ${p.pod} (${p.zone}) — ground cover below threshold. ${p.notes||''}`});
     if(p.restExtFlag) alerts.push({pod:p,sev:'purple',t:'Rest Extended (override)',d:`Pod ${p.pod} (${p.zone}) — growth rate below seasonal baseline. ${p.notes||''}`});
@@ -453,13 +459,35 @@ function renderAlerts(){
       }
     }
     if(p.status==='GrazeReady' && p.daysSince!=null && p.daysSince > Math.ceil(p.rest*1.6)){
-      alerts.push({pod:p,sev:'blue',t:'Over-rest risk',d:`Pod ${p.pod} recovered ${p.daysSince}d ago (rest target ${p.rest}d). Forage may be over-mature — consider grazing.`});
+      // A pod with no field-log history at all just means the sheet was never updated —
+      // that's a data-freshness problem, not evidence the pod itself is over-mature.
+      // Group those separately instead of spamming one card per idle pod.
+      if(!p.loggedSinceReady){
+        staleGroup.push(p);
+      } else {
+        alerts.push({pod:p,sev:'blue',t:'Over-rest risk',d:`Pod ${p.pod} recovered ${p.daysSince}d ago (rest target ${p.rest}d) and has logged field data since — forage may genuinely be over-mature.`});
+      }
     }
   });
-  if(!alerts.length){ document.getElementById('alertsBody').innerHTML='<div style="color:var(--muted)">No active alerts — all systems nominal.</div>'; return; }
-  document.getElementById('alertsBody').innerHTML = alerts.map(a=>
+
+  let html = alerts.map(a=>
     `<div class="alert-item" style="border-left-color:${SEV_COLOR[a.sev]||'var(--yellow)'}" onclick="podModal(${a.pod.pod})">
       <div class="at">Pod ${a.pod.pod} · ${a.t}</div><div class="ad">${a.d}</div></div>`).join('');
+
+  if(staleGroup.length){
+    const oldest = staleGroup.reduce((m,p)=>p.daysSince>m.daysSince?p:m, staleGroup[0]);
+    html += `<div class="alert-item" style="border-left-color:${SEV_COLOR.yellow}" onclick="toggleStaleAlerts()">
+      <div class="at">🕓 ${staleGroup.length} pod${staleGroup.length>1?'s':''} not logged since GrazeReady (oldest: Pod ${oldest.pod} @ ${oldest.daysSince}d)</div>
+      <div class="ad">These pods have had no Field Log entries since going GrazeReady — the sheet has no way to know if they were actually grazed. Likely a logging gap, not an emergency. Click to ${staleAlertsExpanded?'collapse':'show all'}.</div></div>`;
+    if(staleAlertsExpanded){
+      html += staleGroup.sort((a,b)=>b.daysSince-a.daysSince).map(p=>
+        `<div class="alert-item" style="border-left-color:${SEV_COLOR.yellow};margin-left:14px" onclick="podModal(${p.pod})">
+          <div class="at">Pod ${p.pod} · Not logged (${p.daysSince}d idle)</div>
+          <div class="ad">GrazeReady since ${p.grDate?fmt(p.grDate):'—'}, rest target ${p.rest}d, zone ${p.zone}. No measurement or field log on record — log a graze-start/end to confirm status.</div></div>`).join('');
+    }
+  }
+
+  document.getElementById('alertsBody').innerHTML = html || '<div style="color:var(--muted)">No active alerts — all systems nominal.</div>';
 }
 
 /* ---------- 6. Gantt ---------- */
