@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Ngapori Ranch — Forage & Rotational Grazing Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
   :root{
     --bg:#0f1419; --panel:#161c24; --panel2:#1b232e; --ink:#e6edf3; --muted:#8b98a5;
@@ -25,6 +26,32 @@
   .stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
   .btn{background:var(--accent);color:#fff;border:0;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}
   .btn:hover{filter:brightness(1.1)}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .btn.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.green{background:var(--green)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .sync-line{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--gray)}
+  .sync-dot.ok{background:var(--bright-green)}
+  .sync-dot.err{background:var(--red)}
+  .sync-dot.pending{background:var(--yellow);animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .loaderr{background:rgba(248,81,73,.1);border:1px solid var(--red);color:var(--red);padding:10px 12px;border-radius:8px;font-size:12.5px;margin-bottom:14px}
+  /* Log-entry mini form (used inside modal) */
+  .mform{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+  .mform h4{font-size:12.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px}
+  .mfield{margin-bottom:8px}
+  .mfield label{display:block;font-size:10.5px;color:var(--muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px}
+  .mfield input,.mfield select,.mfield textarea{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 8px;color:var(--ink);font-size:13px;font-family:inherit}
+  .mfield textarea{min-height:50px;resize:vertical}
+  .mrow2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .msubmit{width:100%;background:var(--accent);color:#fff;border:0;padding:9px;border-radius:8px;font-weight:700;cursor:pointer;margin-top:4px;font-size:13px}
+  .msubmit:disabled{opacity:.5}
+  .mstatus{font-size:12px;margin-top:6px;min-height:14px}
+  .mstatus.ok{color:var(--bright-green)}
+  .mstatus.err{color:var(--red)}
+  .honly{display:none}
+  .honly.show{display:block}
   /* Grid */
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   .full{grid-column:1/-1}
@@ -129,9 +156,13 @@
       <div class="stat"><b id="tAcres">20</b><span>Acres</span></div>
       <div class="stat"><b>723</b><span>Seed (lbs)</span></div>
       <div class="stat"><b id="tDate"></b><span>Today</span></div>
+      <div class="sync-line"><span class="sync-dot pending" id="syncDot"></span><span id="syncText">Connecting to sheet…</span></div>
+      <button class="btn green" onclick="openLogModal()">📝 Log Field Entry</button>
+      <button class="btn ghost" id="refreshBtn" onclick="loadAll()">↻ Refresh</button>
       <button class="btn" onclick="downloadSelf()">⬇ Download this dashboard</button>
     </div>
   </header>
+  <div id="loadError"></div>
 
   <div class="grid">
     <!-- 1. Active Pod -->
@@ -180,177 +211,286 @@
 </div>
 
 <script>
-/* ---------- Data (from Ngapori Ranch workbook) ---------- */
-const TODAY = new Date('2026-08-07T00:00:00');
-const SEASON_REST = { Spring: 25, Summer: 47, Fall: 55, Winter: 90 }; // baseline midpoints
-function seasonOf(d){const m=d.getMonth();if(m>=2&&m<=4)return'Spring';if(m>=5&&m<=7)return'Summer';if(m>=8&&m<=10)return'Fall';return'Winter';}
+/* =========================================================================
+   CONFIG — published CSV feeds + Apps Script web app endpoint
+   ========================================================================= */
+const SHEETS = {
+  dashboard: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRGqbocCIRer9iDmj3e__tcat4cwRbvVIiuJ4hn0Yasxjng5T7X9WOviHe3V3vj78c5q7SiVsHBMYXY/pub?gid=1724025015&single=true&output=csv",
+  podmaster: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRGqbocCIRer9iDmj3e__tcat4cwRbvVIiuJ4hn0Yasxjng5T7X9WOviHe3V3vj78c5q7SiVsHBMYXY/pub?gid=1224025893&single=true&output=csv",
+  zoneconfig:"https://docs.google.com/spreadsheets/d/e/2PACX-1vRGqbocCIRer9iDmj3e__tcat4cwRbvVIiuJ4hn0Yasxjng5T7X9WOviHe3V3vj78c5q7SiVsHBMYXY/pub?gid=1616014200&single=true&output=csv"
+};
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4wUWncukgW93QdkE2f08ocbOpdqQpxW7q3N51PvQivFkOOuliAAULtyiRwLcDNZfow/exec";
 
-const PODS = [
- {pod:1,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-03-31',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:2,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-02',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:3,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-04',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:4,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-06',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:5,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-08',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:6,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-10',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:7,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-12',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:8,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-14',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:9,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-16',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:10,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-18',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
- {pod:11,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-10',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
- {pod:12,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-12',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
- {pod:13,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-14',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
- {pod:14,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-16',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
- {pod:15,zone:'Stockpile',species:'Cattle → Lamb → Hens',acres:1,seedRate:39,seed:39,entryHt:'12"+',exitRes:'6" residual',plant:'2026-09-01',growth:30,graze:3,rest:60,poultry:2,seedOrdered:false},
- {pod:16,zone:'Stockpile',species:'Cattle → Lamb → Hens',acres:1,seedRate:39,seed:39,entryHt:'12"+',exitRes:'6" residual',plant:'2026-09-04',growth:30,graze:3,rest:60,poultry:2,seedOrdered:false},
- {pod:17,zone:'Stockpile',species:'Cattle → Lamb → Hens',acres:1,seedRate:39,seed:39,entryHt:'12"+',exitRes:'6" residual',plant:'2026-09-07',growth:30,graze:3,rest:60,poultry:2,seedOrdered:false},
- {pod:18,zone:'Sacrifice',species:'Heavy Traffic / Hay',acres:1,seedRate:36,seed:36,entryHt:'Emergency',exitRes:'3"–4"',plant:'2026-10-01',growth:16,graze:5,rest:90,poultry:0,seedOrdered:false},
- {pod:19,zone:'Sacrifice',species:'Heavy Traffic / Hay',acres:1,seedRate:36,seed:36,entryHt:'Emergency',exitRes:'3"–4"',plant:'2026-10-06',growth:16,graze:5,rest:90,poultry:0,seedOrdered:false},
- {pod:20,zone:'Sacrifice',species:'Heavy Traffic / Hay',acres:1,seedRate:36,seed:36,entryHt:'Emergency',exitRes:'3"–4"',plant:'2026-10-11',growth:16,graze:5,rest:90,poultry:0,seedOrdered:false},
-];
+const TODAY = new Date(); TODAY.setHours(0,0,0,0);
+let PODS = [];
+let ZONE_INFO = {}; // { zoneName: { seedOrdered: bool, plantStart: Date } }
 
-/* Determine live status per pod relative to TODAY */
-function computeStatus(p){
-  const plant=new Date(p.plant+'T00:00:00');
-  const grazeReady=new Date(plant); grazeReady.setDate(grazeReady.getDate()+p.growth);
-  const daysSince = Math.floor((TODAY-grazeReady)/86400000);
-  // Spring pods completed cycle 1 + recovery; now GrazeReady for cycle 2
-  if(p.zone==='Sacrifice'||p.zone==='Stockpile'){ return {status:'Ready to Plant', cls:'s-ReadyToPlant', reason:'Fall planting window not yet open'}; }
-  if(daysSince < 0) return {status:'Growing', cls:'s-Growing'};
-  // All active pods have recovered -> GrazeReady
-  return {status:'GrazeReady', cls:'s-GrazeReady', daysSince};
+/* ---------- CSV helpers ---------- */
+function fetchCSV(url){
+  return fetch(url + (url.includes('?')?'&':'?') + 'cachebust=' + Date.now())
+    .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
+    .then(text => new Promise((resolve,reject)=>{
+      Papa.parse(text, { header:false, skipEmptyLines:true, complete: res => resolve(res.data), error: reject });
+    }));
 }
-PODS.forEach(p=>Object.assign(p,computeStatus(p)));
+function normHeader(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+function findHeaderRow(rows, mustContainNorm){
+  for(let i=0;i<rows.length;i++){
+    for(let j=0;j<rows[i].length;j++){ if(normHeader(rows[i][j])===mustContainNorm) return i; }
+  }
+  return 0;
+}
+function toNormObjects(rows, headerIdx){
+  const headers = rows[headerIdx].map(normHeader);
+  return rows.slice(headerIdx+1).map(r=>{
+    const o={}; headers.forEach((h,i)=>{ if(h) o[h] = (r[i]!==undefined ? r[i] : ''); }); return o;
+  });
+}
+function parseDate(v){
+  if(!v) return null;
+  v = String(v).trim(); if(!v) return null;
+  let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return new Date(+m[3], +m[1]-1, +m[2]);
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
+function isTrue(v){ return /^(1|true|yes)$/i.test(String(v||'').trim()); }
+function daysBetween(a,b){ if(!a||!b) return null; return Math.round((b-a)/86400000); }
+
+/* ---------- Status → badge class / decision copy ---------- */
+const STATUS_META = {
+  'Ready to Plant':  { cls:'s-ReadyToPlant', decision:'Awaiting planting window.' },
+  'Planted':         { cls:'s-Planted',      decision:'Recently seeded — watch for germination.' },
+  'Growing':         { cls:'s-Growing',      decision:'Establishing — no grazing yet, monitor height weekly.' },
+  'GrazeReady':      { cls:'s-GrazeReady',   decision:'MOVE livestock in — measure height first, then open the gate.' },
+  'Grazed':          { cls:'s-Grazing',      decision:'Grazing in progress — monitor residual height daily.' },
+  'Poultry Cycling': { cls:'s-Poultry',      decision:'Poultry tractor active — exit before tillers exceed 2".' },
+  'Recovery':        { cls:'s-Recovery',     decision:'Resting — no action needed until GrazeReady.' },
+  'Rest Extended':   { cls:'s-RestExtended', decision:'⚠ Manual override active — extend rest before re-entry.' },
+  'Replant Needed':  { cls:'s-Replant',      decision:'⚠ Manual override active — schedule overseed / replant.' }
+};
+function statusMeta(s){ return STATUS_META[s] || { cls:'s-ReadyToPlant', decision:'Status: '+(s||'Unknown') }; }
+
+/* =========================================================================
+   LOAD PODS FROM POD MASTER (+ ZONECONFIG for seed-order state)
+   ========================================================================= */
+async function loadData(){
+  const [dashRows, podRowsRaw, zoneRowsRaw] = await Promise.all([
+    fetchCSV(SHEETS.dashboard), fetchCSV(SHEETS.podmaster), fetchCSV(SHEETS.zoneconfig)
+  ]);
+
+  // ZoneConfig -> seed-ordered + plant-start per zone
+  const zIdx = findHeaderRow(zoneRowsRaw, 'zone');
+  const zObjs = toNormObjects(zoneRowsRaw, zIdx).filter(o=>o['zone']);
+  ZONE_INFO = {};
+  zObjs.forEach(o=>{
+    ZONE_INFO[o['zone']] = {
+      seedOrdered: isTrue(o['seed_ordered']) || /yes/i.test(o['seed_ordered']||''),
+      plantStart: parseDate(o['plant_start_date'])
+    };
+  });
+
+  // Pod Master -> PODS
+  const pIdx = findHeaderRow(podRowsRaw, 'pod #');
+  const pObjs = toNormObjects(podRowsRaw, pIdx).filter(o=>o['pod #']);
+  PODS = pObjs.map(o=>{
+    const p = {};
+    p.pod = parseInt(o['pod #'],10);
+    p.zone = o['zone'] || '';
+    p.species = o['species sequence'] || '';
+    p.acres = parseFloat(o['acres'])||0;
+    p.seedRate = parseFloat(o['seed rate (lb/acre)'])||0;
+    p.seed = parseFloat(o['seed needed (lbs)'])||0;
+    p.entryHt = o['entry height target'] || '';
+    p.exitRes = o['exit residual target'] || '';
+    p.plantRaw = o['plant date'] || '';
+    p.plant = parseDate(p.plantRaw);
+    p.growth = parseInt(o['growth days'],10)||0;
+    p.grDate = parseDate(o['grazeready date']);
+    p.graze = parseInt(o['graze days'],10)||0;
+    p.gsDate = parseDate(o['grazing start']);
+    p.geDate = parseDate(o['grazing end']);
+    p.psDate = parseDate(o['poultry start']);
+    p.peDate = parseDate(o['poultry end']);
+    p.rest = parseInt(o['rest days'],10)||0;
+    p.nextGR = parseDate(o['next grazeready (recovery complete)']);
+    p.override = (o['manual override']||'').trim();
+    p.status = (o['status']||'').trim();
+    p.notes = o['notes'] || '';
+    p.activeToday = isTrue(o['active today? (h)']);
+    p.upcomingEntry = parseDate(o['upcoming entry date (h)']) || p.grDate;
+    p.lastHt = (o['last measured height (in)']||'').trim();
+    p.lastDate = o['last measured date'] || '';
+    p.htBelowFlag = isTrue(o['height below target flag (h)']);
+    p.poultryActive = isTrue(o['poultry active? (h)']);
+    p.restExtFlag = isTrue(o['rest extended flag (h)']);
+    p.replantFlag = isTrue(o['replant flag (h)']);
+    p.poultryOverdueFlag = isTrue(o['poultry overdue flag (h)']);
+    p.poultry = daysBetween(p.psDate, p.peDate) ?? 2;
+    const zi = ZONE_INFO[p.zone] || {};
+    p.seedOrdered = !!zi.seedOrdered;
+    const meta = statusMeta(p.status);
+    p.cls = meta.cls;
+    p.decision = meta.decision;
+    p.daysSince = p.grDate ? Math.round((TODAY - p.grDate)/86400000) : null;
+    return p;
+  }).sort((a,b)=>a.pod-b.pod);
+
+  // Dashboard tab -> header stats (defensive scan of label/value pairs)
+  let totalPods=PODS.length, totalAcres=PODS.reduce((s,p)=>s+p.acres,0), totalSeed=PODS.reduce((s,p)=>s+p.seed,0);
+  dashRows.forEach(r=>{
+    r.forEach((cell,i)=>{
+      const c = String(cell||'').trim();
+      if(c==='Total Pods:' && r[i+1]) totalPods = r[i+1];
+      if(c==='Total Acres:' && r[i+1]) totalAcres = r[i+1];
+      if(c==='Total Seed Needed (lbs):' && r[i+1]) totalSeed = r[i+1];
+    });
+  });
+  document.getElementById('tPods').textContent = totalPods;
+  document.getElementById('tAcres').textContent = totalAcres;
+}
 
 /* ---------- 1. Active Pod ---------- */
+function pickActivePod(){
+  let active = PODS.find(p=>p.activeToday);
+  if(!active) active = PODS.find(p=>p.status==='Grazed') || PODS.find(p=>p.status==='Poultry Cycling');
+  if(!active) active = [...PODS].filter(p=>p.status==='GrazeReady')
+    .sort((a,b)=>(a.grDate||0)-(b.grDate||0))[0];
+  if(!active) active = PODS[0];
+  return active;
+}
 function renderActive(){
-  // Pick the pod currently "active" — first GrazeReady in the rotation order, simulate grazing starts today
-  const active = PODS.find(p=>p.status==='GrazeReady');
-  const grazeStart=TODAY, grazeEnd=new Date(TODAY); grazeEnd.setDate(grazeEnd.getDate()+active.graze-1);
-  const poultryStart=new Date(grazeEnd); poultryStart.setDate(poultryStart.getDate()+1);
-  const poultryEnd=new Date(poultryStart); poultryEnd.setDate(poultryEnd.getDate()+active.poultry);
-  const firstSpecies=active.species.split('→')[0].trim();
+  const active = pickActivePod();
+  if(!active){ document.getElementById('activePodBody').innerHTML = '<div style="color:var(--muted)">No pod data.</div>'; return; }
+  const grazeStart = active.gsDate, grazeEnd = active.geDate;
+  const firstSpecies = (active.species||'').split('→')[0].trim();
+  const meta = statusMeta(active.status);
   document.getElementById('activePodBody').innerHTML=`
     <div class="active-hero">
       <div class="pod-id">Pod ${active.pod}<span class="zone">— ${active.zone}</span></div>
-      <div class="badge s-Grazing">● Status: Grazing (cycle 2 starts today)</div>
-      <div class="row"><span>Species in pod today</span><b>${firstSpecies}</b></div>
-      <div class="row"><span>Full sequence</span><b>${active.species}</b></div>
-      <div class="row"><span>Entry height target</span><b>${active.entryHt}</b></div>
-      <div class="row"><span>Residual target</span><b>${active.exitRes}</b></div>
-      <div class="row"><span>Grazing window</span><b>${fmt(grazeStart)} → ${fmt(grazeEnd)}</b></div>
-      <div class="decision">📋 Today's decision: <span style="color:var(--bright-green)">MOVE livestock in</span> — measure height first, then open the gate.</div>
+      <div class="badge ${meta.cls}">● Status: ${active.status || '—'}${active.override?' · Override: '+active.override:''}</div>
+      <div class="row"><span>Species in pod today</span><b>${firstSpecies||'—'}</b></div>
+      <div class="row"><span>Full sequence</span><b>${active.species||'—'}</b></div>
+      <div class="row"><span>Entry height target</span><b>${active.entryHt||'—'}</b></div>
+      <div class="row"><span>Residual target</span><b>${active.exitRes||'—'}</b></div>
+      <div class="row"><span>Last measured height</span><b>${active.lastHt?active.lastHt+'"':'No Data'}</b></div>
+      <div class="row"><span>Grazing window</span><b>${grazeStart?fmt(grazeStart):'—'} → ${grazeEnd?fmt(grazeEnd):'—'}</b></div>
+      <div class="decision">📋 Today's decision: <span style="color:var(--bright-green)">${active.decision}</span></div>
     </div>`;
 }
 
 /* ---------- 2. Next Pod Queue ---------- */
 function renderQueue(){
-  const ready=PODS.filter(p=>p.status==='GrazeReady');
-  const next=ready.slice(1,6); // skip the active one
-  document.getElementById('queueBody').innerHTML=next.map(p=>{
-    // simulate last measurement (no real data -> "No Data")
-    const ht='No Data';
-    const readyFlag = p.daysSince>=p.rest ? '✅' : '⚠️';
-    const note = p.daysSince>Math.ceil(p.rest*1.5) ? '⚠️ Over-rest risk' : (p.daysSince<p.rest?'⏳ Rest days not met':'Ready');
+  const active = pickActivePod();
+  const ready = PODS.filter(p=>p.status==='GrazeReady' && p!==active)
+    .sort((a,b)=>(a.upcomingEntry||0)-(b.upcomingEntry||0)).slice(0,6);
+  document.getElementById('queueBody').innerHTML = ready.map(p=>{
+    const ht = p.lastHt ? p.lastHt+'"' : 'No Data';
+    const overRest = p.daysSince!=null && p.daysSince > Math.ceil(p.rest*1.5);
+    const readyFlag = p.htBelowFlag ? '⚠️' : '✅';
+    const note = p.restExtFlag ? '⚠️ Rest Extended override'
+      : p.replantFlag ? '⚠️ Replant Needed override'
+      : overRest ? '⚠️ Over-rest risk'
+      : p.htBelowFlag ? '⚠️ Height below target' : 'Ready';
     return `<tr style="cursor:pointer" onclick="podModal(${p.pod})">
       <td><b>${p.pod}</b></td><td>${p.zone}</td>
-      <td>${fmt(addDays(TODAY,0))}</td><td>${ht}</td>
+      <td>${p.grDate?fmt(p.grDate):'—'}</td><td>${ht}</td>
       <td class="${readyFlag==='✅'?'flag-ok':'flag-warn'}">${readyFlag}</td>
       <td style="white-space:normal;max-width:180px;color:var(--muted);font-size:11.5px">${note}</td></tr>`;
-  }).join('');
+  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No pods currently queued.</td></tr>';
 }
 
 /* ---------- 3. Poultry ---------- */
 function renderPoultry(){
-  const active=PODS.find(p=>p.status==='GrazeReady');
-  const grazeEnd=new Date(TODAY); grazeEnd.setDate(grazeEnd.getDate()+active.graze-1);
-  const poultryStart=new Date(grazeEnd); poultryStart.setDate(poultryStart.getDate()+1);
-  const poultryEnd=new Date(poultryStart); poultryEnd.setDate(poultryEnd.getDate()+active.poultry);
-  const exitBy=new Date(poultryEnd);
-  const nextPoultryPod=PODS.filter(p=>p.status==='GrazeReady')[1];
+  const active = pickActivePod();
+  const nextPoultryPod = PODS.filter(p=>p.status==='GrazeReady' && p!==active)
+    .sort((a,b)=>(a.upcomingEntry||0)-(b.upcomingEntry||0))[0];
+  const overdue = active && active.poultryOverdueFlag;
   document.getElementById('poultryBody').innerHTML=`
     <div class="poultry-block">
-      <div class="row"><span>Current poultry pod</span><b>Pod ${active.pod} (${active.zone})</b></div>
-      <div class="row"><span>Entry date/time</span><b>${fmt(poultryStart)} · 06:00</b></div>
-      <div class="row"><span>Required exit by</span><b>${fmt(exitBy)} (regrowth &lt; 2")</b></div>
-      <div class="row"><span>Next poultry pod</span><b>Pod ${nextPoultryPod?nextPoultryPod.pod:'—'} (${nextPoultryPod?nextPoultryPod.zone:'—'})</b></div>
-      <div class="alert warn" style="margin-top:8px">⚠️ Alert: regrowth must be checked — exit BEFORE fresh tillers exceed 2" to avoid trampling new growth.</div>
-      <div class="alert ok">✅ Poultry enters 24–72 hr post-cattle exit: breaks pats, controls flies, injects bio-available N.</div>
+      <div class="row"><span>Current poultry pod</span><b>${active?`Pod ${active.pod} (${active.zone})`:'—'}</b></div>
+      <div class="row"><span>Entry date</span><b>${active&&active.psDate?fmt(active.psDate):'—'}</b></div>
+      <div class="row"><span>Required exit by</span><b>${active&&active.peDate?fmt(active.peDate):'—'} (regrowth &lt; 2")</b></div>
+      <div class="row"><span>Next poultry pod</span><b>${nextPoultryPod?`Pod ${nextPoultryPod.pod} (${nextPoultryPod.zone})`:'—'}</b></div>
+      <div class="alert ${overdue?'warn':'ok'}" style="margin-top:8px">${overdue
+        ? '🚨 OVERDUE: poultry should have exited already — check tillers now before trampling new growth.'
+        : '✅ Poultry enters 24–72 hr post-cattle exit: breaks pats, controls flies, injects bio-available N.'}</div>
     </div>`;
 }
 
 /* ---------- 4. Pod Grid ---------- */
 function renderPodGrid(){
-  document.getElementById('podGrid').innerHTML=PODS.map(p=>{
-    const plant=new Date(p.plant);
-    const nextReady=new Date(plant); nextReady.setDate(nextReady.getDate()+p.growth+p.graze+p.rest);
-    const isAlert = p.zone==='Stockpile'&&!p.seedOrdered;
+  document.getElementById('podGrid').innerHTML = PODS.map(p=>{
+    const isAlert = p.restExtFlag || p.replantFlag || (['Stockpile','Sacrifice'].includes(p.zone) && !p.seedOrdered);
     return `<div class="pod-card ${isAlert?'alert':''}" onclick="podModal(${p.pod})">
       <div class="pnum">${p.pod} <span style="font-size:10px;color:var(--muted);font-weight:400">${p.acres}ac</span></div>
       <div class="pzone">${p.zone}</div>
-      <span class="pstatus ${p.cls}">${p.status}</span>
-      <div class="pmeta">Entry: ${p.entryHt}</div>
-      <div class="pmeta">Rest req: ${p.rest}d</div>
-      <div class="pmeta">Next ready: ${p.status==='Ready to Plant'?'(planted '+fmt(plant)+')':fmt(nextReady)}</div>
-      ${p.seedOrdered?'':`<div class="pmeta" style="color:var(--red)">⚠ Seed not ordered</div>`}
+      <span class="pstatus ${p.cls}">${p.status||'—'}</span>
+      <div class="pmeta">Entry: ${p.entryHt||'—'}</div>
+      <div class="pmeta">Rest req: ${p.rest||'—'}d</div>
+      <div class="pmeta">Next ready: ${p.status==='Ready to Plant'&&p.plant?'(planted '+fmt(p.plant)+')':(p.nextGR?fmt(p.nextGR):'—')}</div>
+      ${p.override?`<div class="pmeta" style="color:var(--red)">⚠ ${p.override}</div>`:''}
+      ${(['Stockpile','Sacrifice'].includes(p.zone)&&!p.seedOrdered)?'<div class="pmeta" style="color:var(--red)">⚠ Seed not ordered</div>':''}
     </div>`;
   }).join('');
 }
 
 /* ---------- 5. Alerts ---------- */
+const SEV_COLOR = { red:'var(--red)', purple:'var(--purple)', blue:'var(--blue)', orange:'var(--orange)', yellow:'var(--yellow)' };
 function renderAlerts(){
   const alerts=[];
   PODS.forEach(p=>{
-    if(p.zone==='Stockpile'&&!p.seedOrdered) alerts.push({pod:p,sev:'red',t:'Seed not ordered',d:`Pod ${p.pod} (${p.zone}) — ${p.seed} lbs needed before ${fmt(new Date(p.plant))} planting window.`});
-    if(p.zone==='Sacrifice'&&!p.seedOrdered) alerts.push({pod:p,sev:'red',t:'Seed not ordered',d:`Pod ${p.pod} (${p.zone}) — ${p.seed} lbs needed before ${fmt(new Date(p.plant))} fall planting.`});
-    if(p.status==='GrazeReady'&&p.daysSince>Math.ceil(p.rest*1.6)) alerts.push({pod:p,sev:'purple',t:'Over-rest risk',d:`Pod ${p.pod} recovered ${p.daysSince}d ago (rest target ${p.rest}d). Forage may be over-mature — consider grazing.`});
+    if(p.replantFlag) alerts.push({pod:p,sev:'red',t:'Replant Needed (override)',d:`Pod ${p.pod} (${p.zone}) — ground cover below threshold. ${p.notes||''}`});
+    if(p.restExtFlag) alerts.push({pod:p,sev:'purple',t:'Rest Extended (override)',d:`Pod ${p.pod} (${p.zone}) — growth rate below seasonal baseline. ${p.notes||''}`});
+    if(p.poultryOverdueFlag) alerts.push({pod:p,sev:'orange',t:'Poultry overdue',d:`Pod ${p.pod} (${p.zone}) — poultry should have exited by ${p.peDate?fmt(p.peDate):'target date'}.`});
+    const zi = ZONE_INFO[p.zone];
+    if(zi && !zi.seedOrdered && zi.plantStart){
+      const daysToPlant = Math.floor((zi.plantStart - TODAY)/86400000);
+      if(daysToPlant>0 && daysToPlant<40 && !alerts.some(a=>a.t==='Seed not ordered'&&a.pod.zone===p.zone)){
+        alerts.push({pod:p,sev:'red',t:'Seed not ordered',d:`${p.zone} zone — plants in ${daysToPlant}d (${fmt(zi.plantStart)}). Seed NOT ordered.`});
+      }
+    }
+    if(p.status==='GrazeReady' && p.daysSince!=null && p.daysSince > Math.ceil(p.rest*1.6)){
+      alerts.push({pod:p,sev:'blue',t:'Over-rest risk',d:`Pod ${p.pod} recovered ${p.daysSince}d ago (rest target ${p.rest}d). Forage may be over-mature — consider grazing.`});
+    }
   });
-  // synthetic: pods not yet planted but window approaching
-  PODS.filter(p=>p.zone==='Stockpile').forEach(p=>{
-    const plant=new Date(p.plant); const daysToPlant=Math.floor((plant-TODAY)/86400000);
-    if(daysToPlant>0&&daysToPlant<40) alerts.push({pod:p,sev:'blue',t:'Planting window approaching',d:`Pod ${p.pod} (${p.zone}) plants in ${daysToPlant}d (${fmt(plant)}). Seed ${p.seedOrdered?'':'NOT ' }ordered.`});
-  });
-  if(!alerts.length){document.getElementById('alertsBody').innerHTML='<div style="color:var(--muted)">No active alerts — all systems nominal.</div>';return;}
-  document.getElementById('alertsBody').innerHTML=alerts.map(a=>
-    `<div class="alert-item sev-${a.sev}" onclick="podModal(${a.pod.pod})"><div class="at">Pod ${a.pod.pod} · ${a.t}</div><div class="ad">${a.d}</div></div>`).join('');
+  if(!alerts.length){ document.getElementById('alertsBody').innerHTML='<div style="color:var(--muted)">No active alerts — all systems nominal.</div>'; return; }
+  document.getElementById('alertsBody').innerHTML = alerts.map(a=>
+    `<div class="alert-item" style="border-left-color:${SEV_COLOR[a.sev]||'var(--yellow)'}" onclick="podModal(${a.pod.pod})">
+      <div class="at">Pod ${a.pod.pod} · ${a.t}</div><div class="ad">${a.d}</div></div>`).join('');
 }
 
 /* ---------- 6. Gantt ---------- */
 function renderGantt(){
   const days=14; let html=`<div class="gantt-axis"><div></div>`;
-  for(let i=0;i<days;i++){const d=addDays(TODAY,i);html+=`<div>${d.getDate()}/${d.getMonth()+1}</div>`;}
+  for(let i=0;i<days;i++){ const d=addDays(TODAY,i); html+=`<div>${d.getDate()}/${d.getMonth()+1}</div>`; }
   html+='</div>';
-  // schedule: GrazeReady pods graze sequentially from today, then poultry, then recovery
-  const ready=PODS.filter(p=>p.status==='GrazeReady');
-  let cursor=0;
   PODS.forEach(p=>{
     html+=`<div class="gantt-row"><div class="gantt-label">P${p.pod}</div>`;
     let cells='';
-    if(p.status==='GrazeReady'){
-      const idx=ready.indexOf(p);
-      const startDay=idx*p.graze; // sequential
-      const grazeEndDay=startDay+p.graze;
-      const poultryStart=grazeEndDay, poultryEnd=poultryStart+p.poultry;
-      // grazing bar
-      if(startDay<days) cells+=bar(startDay,grazeEndDay,'bar-graze','Graze');
-      if(p.poultry>0&&poultryStart<days) cells+=bar(poultryStart,poultryEnd,'bar-poultry','Hen');
-      if(grazeEndDay<days) cells+=bar(grazeEndDay,days,'bar-recovery',''); // recovery onward
-    } else {
-      // Ready to Plant -> rest/standby, mark planting date if within 14d
-      const plant=new Date(p.plant); const pDay=Math.floor((plant-TODAY)/86400000);
-      if(pDay>=0&&pDay<days) cells+=bar(pDay,Math.min(pDay+1,days),'bar-rest','Plant');
-      else cells+=bar(0,days,'bar-rest','');
+    const off = d => d ? Math.floor((d-TODAY)/86400000) : null;
+    const gs=off(p.gsDate), ge=off(p.geDate), ps=off(p.psDate), pe=off(p.peDate);
+    if(gs!=null && ge!=null) cells += bar(gs, ge+1, 'bar-graze', 'Graze');
+    if(ps!=null && pe!=null) cells += bar(ps, pe+1, 'bar-poultry', 'Hen');
+    if(ge!=null){
+      const recoStart = pe!=null ? pe+1 : ge+1;
+      if(recoStart < days) cells += bar(Math.max(0,recoStart), days, 'bar-recovery', '');
     }
-    html+=cells;
-    // fill empty cell backgrounds
-    for(let i=0;i<days;i++){ /* grid handles */ }
-    html+=`</div>`;
+    if(!cells){
+      const plantOff = off(p.plant);
+      if(plantOff!=null && plantOff>=0 && plantOff<days) cells += bar(plantOff, Math.min(plantOff+1,days), 'bar-rest', 'Plant');
+      else cells += bar(0, days, 'bar-rest', '');
+    }
+    html += cells + `</div>`;
   });
-  document.getElementById('gantt').innerHTML=html;
+  document.getElementById('gantt').innerHTML = html;
 }
 function bar(start,end,cls,label){
-  if(end<=start)return'';
+  if(end<=start) return '';
   start=Math.max(0,start); end=Math.min(14,end);
-  if(end<=0||start>=14)return'';
+  if(end<=0||start>=14) return '';
   const gridStart=start+1, gridEnd=end+1;
   return `<div class="bar ${cls}" style="grid-column:${gridStart}/${gridEnd};align-self:center">${label}</div>`;
 }
@@ -358,17 +498,23 @@ function bar(start,end,cls,label){
 /* ---------- 7. Seed ---------- */
 function renderSeed(){
   const zones={};
-  PODS.forEach(p=>{zones[p.zone]=zones[p.zone]||{pods:0,acres:0,seed:0,ordered:0,needed:0};zones[p.zone].pods++;zones[p.zone].acres+=p.acres;zones[p.zone].seed+=p.seed;zones[p.zone].needed+=p.seed;if(p.seedOrdered)zones[p.zone].ordered+=p.seed;});
+  PODS.forEach(p=>{
+    zones[p.zone]=zones[p.zone]||{pods:0,acres:0,seed:0,ordered:0,needed:0};
+    zones[p.zone].pods++; zones[p.zone].acres+=p.acres; zones[p.zone].seed+=p.seed; zones[p.zone].needed+=p.seed;
+    if(p.seedOrdered) zones[p.zone].ordered+=p.seed;
+  });
   let html=''; let totalNeed=0,totalOrdered=0;
-  for(const z in zones){const v=zones[z];totalNeed+=v.seed;totalOrdered+=v.ordered;
+  for(const z in zones){
+    const v=zones[z]; totalNeed+=v.seed; totalOrdered+=v.ordered;
     const miss=v.needed-v.ordered;
     html+=`<div class="seed-zone">
-      <div class="zh"><span>${z} <span style="color:var(--muted);font-weight:400;font-size:11px">· ${v.pods} pods</span></span><span>${v.seed} lbs</span></div>
-      <div class="zmeta">${v.acres} acres · ordered ${v.ordered} lbs ${miss>0?`· <span style="color:var(--red)">${miss} lbs missing</span>`:'· ✅ ordered'}</div>
-      <div class="bar-wrap"><div class="bar-fill ${miss>0?'miss':''}" style="width:${(v.ordered/v.needed*100)}%"></div></div>
-    </div>`;}
-  html+=`<div class="seed-zone"><div class="zh"><span>TOTAL</span><span>${totalNeed} lbs</span></div><div class="zmeta">Ordered ${totalOrdered} · Outstanding ${totalNeed-totalOrdered} lbs</div></div>`;
-  document.getElementById('seedBody').innerHTML=html;
+      <div class="zh"><span>${z} <span style="color:var(--muted);font-weight:400;font-size:11px">· ${v.pods} pods</span></span><span>${Math.round(v.seed)} lbs</span></div>
+      <div class="zmeta">${v.acres} acres · ordered ${Math.round(v.ordered)} lbs ${miss>0?`· <span style="color:var(--red)">${Math.round(miss)} lbs missing</span>`:'· ✅ ordered'}</div>
+      <div class="bar-wrap"><div class="bar-fill ${miss>0?'miss':''}" style="width:${v.needed?(v.ordered/v.needed*100):0}%"></div></div>
+    </div>`;
+  }
+  html+=`<div class="seed-zone"><div class="zh"><span>TOTAL</span><span>${Math.round(totalNeed)} lbs</span></div><div class="zmeta">Ordered ${Math.round(totalOrdered)} · Outstanding ${Math.round(totalNeed-totalOrdered)} lbs</div></div>`;
+  document.getElementById('seedBody').innerHTML = html;
 }
 
 /* ---------- 8. Checklist ---------- */
@@ -377,7 +523,6 @@ function renderChecklist(){
   const saved=JSON.parse(localStorage.getItem('ngapori_checks')||'{}');
   document.getElementById('checklist').innerHTML=CHECKS.map((c,i)=>
     `<div class="check-item ${saved[i]?'done':''}" onclick="toggleCheck(${i},this)"><div class="box">✓</div><div class="label">${c}</div></div>`).join('');
-  // reset daily
   const lastDate=localStorage.getItem('ngapori_check_date');
   const todayStr=TODAY.toISOString().slice(0,10);
   if(lastDate!==todayStr){localStorage.removeItem('ngapori_checks');localStorage.setItem('ngapori_check_date',todayStr);renderChecklist();}
@@ -385,36 +530,155 @@ function renderChecklist(){
 function toggleCheck(i,el){const saved=JSON.parse(localStorage.getItem('ngapori_checks')||'{}');saved[i]=!saved[i];localStorage.setItem('ngapori_checks',JSON.stringify(saved));el.classList.toggle('done');}
 
 /* ---------- Helpers ---------- */
-function fmt(d){return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+function fmt(d){ return d ? d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'; }
 function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
+function val(id){ const el=document.getElementById(id); return el?el.value:''; }
+
+/* ---------- Pod modal (info + field-log form) ---------- */
+function logFormHTML(prefillPod){
+  const podOptions = PODS.map(p=>`<option value="${p.pod}" ${p.pod===prefillPod?'selected':''}>Pod ${p.pod} — ${p.zone}</option>`).join('');
+  return `<div class="mform">
+    <h4>📝 Log Field Entry</h4>
+    <div class="mfield"><label>Pod</label><select id="m_pod">${podOptions}</select></div>
+    <div class="mrow2">
+      <div class="mfield"><label>Date</label><input type="date" id="m_date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="mfield"><label>Action</label><select id="m_action" onchange="updateMActionFields()">
+        <option value="measure">Measurement</option>
+        <option value="graze_start">Graze Start</option>
+        <option value="graze_end">Graze End</option>
+        <option value="poultry">Poultry Move</option>
+        <option value="override">Manual Override</option>
+        <option value="note">Note</option>
+      </select></div>
+    </div>
+    <div class="honly" data-mfor="measure">
+      <div class="mrow2">
+        <div class="mfield"><label>Pre-graze Height (in)</label><input type="number" step="0.1" id="m_pre"></div>
+        <div class="mfield"><label>Soil Moisture</label><select id="m_sm"><option value=""></option><option>Dry</option><option>Moist</option><option>Saturated</option></select></div>
+      </div>
+      <div class="mrow2">
+        <div class="mfield"><label>Dry Matter (lbs/ac)</label><input type="number" id="m_dm"></div>
+        <div class="mfield"><label>Weed Density %</label><input type="number" id="m_weed"></div>
+      </div>
+    </div>
+    <div class="honly" data-mfor="graze_start">
+      <div class="mrow2">
+        <div class="mfield"><label>Species Moved In</label><input type="text" id="m_species"></div>
+        <div class="mfield"><label>Back-fence Set?</label><select id="m_backfence"><option value=""></option><option>Yes</option><option>No</option></select></div>
+      </div>
+    </div>
+    <div class="honly" data-mfor="graze_end">
+      <div class="mfield"><label>Post-graze Residual (in)</label><input type="number" step="0.1" id="m_post"></div>
+    </div>
+    <div class="honly" data-mfor="poultry">
+      <div class="mrow2">
+        <div class="mfield"><label>Poultry Action</label><select id="m_paction"><option value=""></option><option>Tractor In</option><option>Tractor Out</option></select></div>
+        <div class="mfield"><label>Exit By</label><input type="date" id="m_exitby"></div>
+      </div>
+    </div>
+    <div class="honly" data-mfor="override">
+      <div class="mfield"><label>Manual Override</label><select id="m_override"><option value="(none)">(none) — clear</option><option>Rest Extended</option><option>Replant Needed</option></select></div>
+    </div>
+    <div class="mfield"><label>Notes</label><textarea id="m_notes"></textarea></div>
+    <button class="msubmit" id="m_submit" onclick="submitLog(event)">Submit to Field Log</button>
+    <div class="mstatus" id="m_status"></div>
+  </div>`;
+}
+function updateMActionFields(){
+  const v = val('m_action');
+  document.querySelectorAll('.honly').forEach(el=>el.classList.toggle('show', el.dataset.mfor===v));
+}
+async function submitLog(e){
+  e.preventDefault();
+  const btn=document.getElementById('m_submit'), statusEl=document.getElementById('m_status');
+  const podNum = val('m_pod');
+  const p = PODS.find(x=>String(x.pod)===String(podNum));
+  const payload={
+    id:'log_'+Date.now(), date:val('m_date'), pod:podNum, zone:p?p.zone:'',
+    action:val('m_action'), pre:val('m_pre'), post:val('m_post'), dm:val('m_dm'), sm:val('m_sm'), weed:val('m_weed'),
+    species:val('m_species'), grazedays:'', backfence:val('m_backfence'),
+    paction:val('m_paction'), exitby:val('m_exitby'), override:val('m_override'), status:'', notes:val('m_notes')
+  };
+  btn.disabled=true; btn.textContent='Submitting…'; statusEl.textContent=''; statusEl.className='mstatus';
+  try{
+    await fetch(APPS_SCRIPT_URL, {
+      method:'POST', mode:'no-cors',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify(payload)
+    });
+    statusEl.textContent='✓ Logged — sheet will update shortly.'; statusEl.classList.add('ok');
+    setTimeout(()=>{ document.getElementById('modalBg').classList.remove('show'); loadAll(); }, 1400);
+  }catch(err){
+    statusEl.textContent='✗ '+err.message; statusEl.classList.add('err');
+  }finally{
+    btn.disabled=false; btn.textContent='Submit to Field Log';
+  }
+}
 function podModal(n){
-  const p=PODS.find(x=>x.pod===n); const plant=new Date(p.plant);
-  const gr=new Date(plant); gr.setDate(gr.getDate()+p.growth);
+  const p = PODS.find(x=>x.pod===n);
+  if(!p){ return; }
   document.getElementById('modalContent').innerHTML=`
     <span class="mclose" onclick="document.getElementById('modalBg').classList.remove('show')">✕</span>
     <h3>Pod ${p.pod} — ${p.zone}</h3>
-    <div class="row"><span>Species sequence</span><b>${p.species}</b></div>
+    <div class="row"><span>Species sequence</span><b>${p.species||'—'}</b></div>
     <div class="row"><span>Acres</span><b>${p.acres}</b></div>
     <div class="row"><span>Seed rate</span><b>${p.seedRate} lb/ac (${p.seed} lbs)</b></div>
-    <div class="row"><span>Entry / Exit height</span><b>${p.entryHt} / ${p.exitRes}</b></div>
-    <div class="row"><span>Plant date</span><b>${fmt(plant)}</b></div>
-    <div class="row"><span>Growth days</span><b>${p.growth} → GrazeReady ${fmt(gr)}</b></div>
+    <div class="row"><span>Entry / Exit height</span><b>${p.entryHt||'—'} / ${p.exitRes||'—'}</b></div>
+    <div class="row"><span>Plant date</span><b>${p.plant?fmt(p.plant):'—'}</b></div>
+    <div class="row"><span>Growth days</span><b>${p.growth} → GrazeReady ${p.grDate?fmt(p.grDate):'—'}</b></div>
     <div class="row"><span>Graze / Rest</span><b>${p.graze}d / ${p.rest}d</b></div>
-    <div class="row"><span>Status</span><span class="badge ${p.cls}">${p.status}</span></div>
-    <div class="row"><span>Seed ordered</span><b style="color:${p.seedOrdered?'var(--green)':'var(--red)'}">${p.seedOrdered?'Yes':'NO'}</b></div>
-    <div class="row"><span>Poultry window</span><b>${p.poultry>0?p.poultry+'d post-graze':'n/a (sacrifice)'}</b></div>`;
+    <div class="row"><span>Status</span><span class="badge ${p.cls}">${p.status||'—'}</span></div>
+    <div class="row"><span>Manual override</span><b style="color:${p.override?'var(--red)':'var(--muted)'}">${p.override||'None'}</b></div>
+    <div class="row"><span>Last measured height</span><b>${p.lastHt?p.lastHt+'" ('+(p.lastDate||'')+')':'No Data'}</b></div>
+    <div class="row"><span>Seed ordered (zone)</span><b style="color:${p.seedOrdered?'var(--green)':'var(--red)'}">${p.seedOrdered?'Yes':'NO'}</b></div>
+    <div class="row"><span>Poultry window</span><b>${p.poultry>0?p.poultry+'d post-graze':'n/a (sacrifice)'}</b></div>
+    ${p.notes?`<div class="row"><span>Notes</span><b style="text-align:right;max-width:220px">${p.notes}</b></div>`:''}
+    ${logFormHTML(p.pod)}`;
   document.getElementById('modalBg').classList.add('show');
+  updateMActionFields();
 }
-function closeModal(e){if(e.target.id==='modalBg')e.target.classList.remove('show');}
+function openLogModal(){
+  document.getElementById('modalContent').innerHTML =
+    `<span class="mclose" onclick="document.getElementById('modalBg').classList.remove('show')">✕</span>
+     <h3>📝 New Field Log Entry</h3>${logFormHTML(PODS.length?PODS[0].pod:null)}`;
+  document.getElementById('modalBg').classList.add('show');
+  updateMActionFields();
+}
+function closeModal(e){ if(e.target.id==='modalBg') e.target.classList.remove('show'); }
 function downloadSelf(){
   const html='<!DOCTYPE html>\n'+document.documentElement.outerHTML;
   const blob=new Blob([html],{type:'text/html'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ngapori-dashboard.html';a.click();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ngapori-dashboard.html'; a.click();
 }
 
-/* ---------- Init ---------- */
-document.getElementById('tDate').textContent=fmt(TODAY);
+/* =========================================================================
+   INIT / REFRESH
+   ========================================================================= */
+function renderAll(){
+  renderActive(); renderQueue(); renderPoultry(); renderPodGrid();
+  renderAlerts(); renderGantt(); renderSeed(); renderChecklist();
+}
+async function loadAll(){
+  const dot=document.getElementById('syncDot'), txt=document.getElementById('syncText'), btn=document.getElementById('refreshBtn');
+  dot.className='sync-dot pending'; txt.textContent='Syncing with sheet…';
+  if(btn) btn.disabled=true;
+  document.getElementById('loadError').innerHTML='';
+  try{
+    await loadData();
+    renderAll();
+    dot.className='sync-dot ok';
+    txt.textContent='Synced ' + new Date().toLocaleTimeString();
+  }catch(err){
+    dot.className='sync-dot err';
+    txt.textContent='Sync failed';
+    document.getElementById('loadError').innerHTML =
+      `<div class="loaderr">Could not load the ranch sheet (${err.message}). Confirm all tabs are still Published to the web, then hit Refresh.</div>`;
+    console.error(err);
+  }finally{
+    if(btn) btn.disabled=false;
+  }
+}
+document.getElementById('tDate').textContent = fmt(TODAY);
+loadAll();
 renderActive();renderQueue();renderPoultry();renderPodGrid();renderAlerts();renderGantt();renderSeed();renderChecklist();
 </script>
-</body>
-</html>
