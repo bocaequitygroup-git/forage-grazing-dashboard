@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ngapori Ranch — Forage & Rotational Grazing Dashboard</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#161c24; --panel2:#1b232e; --ink:#e6edf3; --muted:#8b98a5;
+    --line:#283340; --accent:#4f8cff; --green:#3fb950; --bright-green:#56d364;
+    --yellow:#e3b341; --orange:#f0883e; --blue:#58a6ff; --purple:#bc8cff; --red:#f85149;
+    --gray:#6e7681; --brown:#b08370; --teal:#2dd4bf; --pink:#f778ba;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.4}
+  a{color:var(--accent);text-decoration:none}
+  .wrap{max-width:1480px;margin:0 auto;padding:18px}
+  /* Header */
+  header.top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:14px 18px;background:linear-gradient(135deg,#1a2230,#11171f);border:1px solid var(--line);border-radius:12px;margin-bottom:16px}
+  header.top h1{font-size:18px;letter-spacing:.3px}
+  header.top h1 small{display:block;color:var(--muted);font-weight:400;font-size:12px;letter-spacing:0;margin-top:2px}
+  .topstats{display:flex;gap:18px;flex-wrap:wrap}
+  .stat{display:flex;flex-direction:column;align-items:flex-start}
+  .stat b{font-size:20px;color:var(--bright-green)}
+  .stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .btn{background:var(--accent);color:#fff;border:0;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}
+  .btn:hover{filter:brightness(1.1)}
+  /* Grid */
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .full{grid-column:1/-1}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .panel h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  /* Active pod */
+  .active-hero{display:flex;flex-direction:column;gap:8px}
+  .active-hero .pod-id{font-size:24px;font-weight:700}
+  .active-hero .pod-id .zone{color:var(--accent);font-weight:600;font-size:16px;margin-left:6px}
+  .badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.4px}
+  .row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .row:last-child{border-bottom:0}
+  .row span:first-child{color:var(--muted)}
+  .decision{margin-top:8px;padding:10px;border-radius:8px;background:var(--panel2);font-weight:600;text-align:center;border:1px solid var(--line)}
+  /* Queue table */
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  tr:hover td{background:var(--panel2)}
+  .flag-ok{color:var(--bright-green)} .flag-warn{color:var(--yellow)}
+  /* Poultry */
+  .poultry-block{display:flex;flex-direction:column;gap:6px}
+  .alert{padding:8px 10px;border-radius:8px;font-size:12.5px;font-weight:600;border:1px solid}
+  .alert.warn{background:rgba(240,136,62,.12);border-color:var(--orange);color:var(--orange)}
+  .alert.ok{background:rgba(63,185,80,.12);border-color:var(--green);color:var(--green)}
+  /* Status grid */
+  .pod-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .pod-card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;cursor:pointer;transition:transform .1s}
+  .pod-card:hover{transform:translateY(-2px);border-color:var(--accent)}
+  .pod-card .pnum{font-weight:700;font-size:14px}
+  .pod-card .pzone{font-size:10.5px;color:var(--muted);margin-bottom:4px}
+  .pod-card .pstatus{font-size:10.5px;font-weight:700;padding:2px 6px;border-radius:5px;display:inline-block;margin-bottom:4px}
+  .pod-card .pmeta{font-size:10.5px;color:var(--muted)}
+  .pod-card.alert{border-color:var(--red)}
+  /* status colors */
+  .s-ReadyToPlant{background:rgba(110,118,129,.25);color:var(--gray)}
+  .s-Planted{background:rgba(176,131,112,.25);color:var(--brown)}
+  .s-Growing{background:rgba(63,185,80,.2);color:var(--green)}
+  .s-GrazeReady{background:rgba(86,211,100,.25);color:var(--bright-green)}
+  .s-Grazing{background:rgba(227,179,65,.25);color:var(--yellow)}
+  .s-Poultry{background:rgba(240,136,62,.25);color:var(--orange)}
+  .s-Recovery{background:rgba(88,166,255,.25);color:var(--blue)}
+  .s-RestExtended{background:rgba(188,140,255,.25);color:var(--purple)}
+  .s-Replant{background:rgba(248,81,73,.25);color:var(--red)}
+  /* Alerts */
+  .alert-item{background:var(--panel2);border-left:3px solid var(--yellow);padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12.5px;cursor:pointer}
+  .alert-item:hover{background:#222b37}
+  .alert-item.sev-red{border-left-color:var(--red)}
+  .alert-item.sev-purple{border-left-color:var(--purple)}
+  .alert-item.sev-blue{border-left-color:var(--blue)}
+  .alert-item .at{font-weight:700}
+  .alert-item .ad{color:var(--muted);font-size:11.5px;margin-top:2px}
+  /* Gantt */
+  .gantt{overflow-x:auto}
+  .gantt-inner{min-width:760px}
+  .gantt-axis{display:grid;grid-template-columns:60px repeat(14,1fr);border-bottom:1px solid var(--line);padding-bottom:4px;margin-bottom:4px}
+  .gantt-axis div{text-align:center;font-size:10px;color:var(--muted)}
+  .gantt-row{display:grid;grid-template-columns:60px repeat(14,1fr);align-items:center;height:22px;border-bottom:1px solid rgba(40,51,64,.5)}
+  .gantt-label{font-size:11px;color:var(--muted);padding-right:6px;text-align:right}
+  .gantt-cell{position:relative;height:22px}
+  .bar{position:absolute;top:3px;bottom:3px;border-radius:4px;font-size:9px;color:#0b0f14;font-weight:700;padding:1px 3px;overflow:hidden;white-space:nowrap}
+  .bar-graze{background:var(--yellow)} .bar-poultry{background:var(--orange)} .bar-recovery{background:rgba(88,166,255,.35)} .bar-rest{background:rgba(110,118,129,.3)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:var(--muted)}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .legend i{width:12px;height:10px;border-radius:3px;display:inline-block}
+  /* Seed summary */
+  .seed-zone{padding:8px 0;border-bottom:1px solid var(--line)}
+  .seed-zone:last-child{border-bottom:0}
+  .seed-zone .zh{display:flex;justify-content:space-between;font-weight:600;font-size:13px}
+  .seed-zone .zmeta{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .seed-zone .bar-wrap{height:6px;background:var(--panel2);border-radius:3px;margin-top:5px;overflow:hidden}
+  .seed-zone .bar-fill{height:100%;background:var(--green)}
+  .seed-zone .bar-fill.miss{background:var(--red)}
+  /* Checklist */
+  .checklist{position:sticky;bottom:0;background:linear-gradient(180deg,#1a232f,#0f1419);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-top:14px}
+  .checklist h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:8px}
+  .check-items{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}
+  .check-item{display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:13px;user-select:none}
+  .check-item .box{width:18px;height:18px;border:2px solid var(--muted);border-radius:5px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:transparent}
+  .check-item.done{opacity:.55}
+  .check-item.done .box{background:var(--green);border-color:var(--green);color:#0b0f14}
+  .check-item.done .label{text-decoration:line-through}
+  /* Modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;max-width:420px;width:90%;max-height:80vh;overflow:auto}
+  .modal h3{margin-bottom:10px;font-size:16px}
+  .modal .mclose{float:right;cursor:pointer;color:var(--muted)}
+  @media(max-width:1080px){.grid{grid-template-columns:1fr}}
+  @media(max-width:640px){.pod-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>🌱 Ngapori Ranch — Forage & Rotational Grazing Dashboard
+      <small>20-Pod · Multi-Species AMP Engine · Cattle · Lambs · Goats · Poultry</small>
+    </h1>
+    <div class="topstats">
+      <div class="stat"><b id="tPods">20</b><span>Pods</span></div>
+      <div class="stat"><b id="tAcres">20</b><span>Acres</span></div>
+      <div class="stat"><b>723</b><span>Seed (lbs)</span></div>
+      <div class="stat"><b id="tDate"></b><span>Today</span></div>
+      <button class="btn" onclick="downloadSelf()">⬇ Download this dashboard</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- 1. Active Pod -->
+    <section class="panel" id="activePod"><h2><span class="dot" style="background:var(--bright-green)"></span>1 · Active Pod — What's Happening Now</h2><div id="activePodBody"></div></section>
+
+    <!-- 2. Next Pod Queue -->
+    <section class="panel"><h2><span class="dot" style="background:var(--accent)"></span>2 · Next Pod Queue</h2>
+      <table><thead><tr><th>Pod</th><th>Zone</th><th>GrazeReady</th><th>Height</th><th>Ready</th><th>Notes</th></tr></thead><tbody id="queueBody"></tbody></table>
+    </section>
+
+    <!-- 3. Poultry Window -->
+    <section class="panel"><h2><span class="dot" style="background:var(--orange)"></span>3 · Poultry Tractor Window</h2><div id="poultryBody"></div></section>
+
+    <!-- 4. Pod Status Grid -->
+    <section class="panel full"><h2><span class="dot" style="background:var(--blue)"></span>4 · Pod Status Grid — Full 20-Pod Lifecycle</h2>
+      <div class="pod-grid" id="podGrid"></div>
+    </section>
+
+    <!-- 5. Recovery & Alerts -->
+    <section class="panel"><h2><span class="dot" style="background:var(--red)"></span>5 · Recovery & Alerts</h2><div id="alertsBody"></div></section>
+
+    <!-- 6. Rotation Timeline -->
+    <section class="panel"><h2><span class="dot" style="background:var(--yellow)"></span>6 · Rotation Timeline — Next 14 Days</h2>
+      <div class="gantt"><div class="gantt-inner" id="gantt"></div></div>
+      <div class="legend">
+        <span><i class="bar-graze"></i>Grazing</span>
+        <span><i class="bar-poultry"></i>Poultry</span>
+        <span><i class="bar-recovery"></i>Recovery</span>
+        <span><i class="bar-rest"></i>Rest/Standby</span>
+      </div>
+    </section>
+
+    <!-- 7. Seed & Zone Summary -->
+    <section class="panel"><h2><span class="dot" style="background:var(--green)"></span>7 · Seed & Zone Summary</h2><div id="seedBody"></div></section>
+  </div>
+
+  <!-- 8. Manager Daily Checklist -->
+  <div class="checklist">
+    <h2>✅ 8 · Manager Daily Checklist</h2>
+    <div class="check-items" id="checklist"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalBg" onclick="closeModal(event)">
+  <div class="modal" id="modalContent"></div>
+</div>
+
+<script>
+/* ---------- Data (from Ngapori Ranch workbook) ---------- */
+const TODAY = new Date('2026-08-07T00:00:00');
+const SEASON_REST = { Spring: 25, Summer: 47, Fall: 55, Winter: 90 }; // baseline midpoints
+function seasonOf(d){const m=d.getMonth();if(m>=2&&m<=4)return'Spring';if(m>=5&&m<=7)return'Summer';if(m>=8&&m<=10)return'Fall';return'Winter';}
+
+const PODS = [
+ {pod:1,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-03-31',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:2,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-02',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:3,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-04',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:4,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-06',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:5,zone:'Finishing',species:'Lamb → Cattle → Hens',acres:1,seedRate:34,seed:34,entryHt:'10"–12"',exitRes:'4"–6" min',plant:'2026-04-08',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:6,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-10',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:7,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-12',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:8,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-14',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:9,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-16',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:10,zone:'Goat Browsing',species:'Goats → Hens',acres:1,seedRate:36,seed:36,entryHt:'10"–14"',exitRes:'4" residual',plant:'2026-04-18',growth:20,graze:2,rest:25,poultry:2,seedOrdered:true},
+ {pod:11,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-10',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
+ {pod:12,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-12',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
+ {pod:13,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-14',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
+ {pod:14,zone:'Drought',species:'Cattle → Lamb → Hens',acres:1,seedRate:37,seed:37,entryHt:'12"–14"',exitRes:'6" residual',plant:'2026-04-16',growth:30,graze:2,rest:30,poultry:2,seedOrdered:true},
+ {pod:15,zone:'Stockpile',species:'Cattle → Lamb → Hens',acres:1,seedRate:39,seed:39,entryHt:'12"+',exitRes:'6" residual',plant:'2026-09-01',growth:30,graze:3,rest:60,poultry:2,seedOrdered:false},
+ {pod:16,zone:'Stockpile',species:'Cattle → Lamb → Hens',acres:1,seedRate:39,seed:39,entryHt:'12"+',exitRes:'6" residual',plant:'2026-09-04',growth:30,graze:3,rest:60,poultry:2,seedOrdered:false},
+ {pod:17,zone:'Stockpile',species:'Cattle → Lamb → Hens',acres:1,seedRate:39,seed:39,entryHt:'12"+',exitRes:'6" residual',plant:'2026-09-07',growth:30,graze:3,rest:60,poultry:2,seedOrdered:false},
+ {pod:18,zone:'Sacrifice',species:'Heavy Traffic / Hay',acres:1,seedRate:36,seed:36,entryHt:'Emergency',exitRes:'3"–4"',plant:'2026-10-01',growth:16,graze:5,rest:90,poultry:0,seedOrdered:false},
+ {pod:19,zone:'Sacrifice',species:'Heavy Traffic / Hay',acres:1,seedRate:36,seed:36,entryHt:'Emergency',exitRes:'3"–4"',plant:'2026-10-06',growth:16,graze:5,rest:90,poultry:0,seedOrdered:false},
+ {pod:20,zone:'Sacrifice',species:'Heavy Traffic / Hay',acres:1,seedRate:36,seed:36,entryHt:'Emergency',exitRes:'3"–4"',plant:'2026-10-11',growth:16,graze:5,rest:90,poultry:0,seedOrdered:false},
+];
+
+/* Determine live status per pod relative to TODAY */
+function computeStatus(p){
+  const plant=new Date(p.plant+'T00:00:00');
+  const grazeReady=new Date(plant); grazeReady.setDate(grazeReady.getDate()+p.growth);
+  const daysSince = Math.floor((TODAY-grazeReady)/86400000);
+  // Spring pods completed cycle 1 + recovery; now GrazeReady for cycle 2
+  if(p.zone==='Sacrifice'||p.zone==='Stockpile'){ return {status:'Ready to Plant', cls:'s-ReadyToPlant', reason:'Fall planting window not yet open'}; }
+  if(daysSince < 0) return {status:'Growing', cls:'s-Growing'};
+  // All active pods have recovered -> GrazeReady
+  return {status:'GrazeReady', cls:'s-GrazeReady', daysSince};
+}
+PODS.forEach(p=>Object.assign(p,computeStatus(p)));
+
+/* ---------- 1. Active Pod ---------- */
+function renderActive(){
+  // Pick the pod currently "active" — first GrazeReady in the rotation order, simulate grazing starts today
+  const active = PODS.find(p=>p.status==='GrazeReady');
+  const grazeStart=TODAY, grazeEnd=new Date(TODAY); grazeEnd.setDate(grazeEnd.getDate()+active.graze-1);
+  const poultryStart=new Date(grazeEnd); poultryStart.setDate(poultryStart.getDate()+1);
+  const poultryEnd=new Date(poultryStart); poultryEnd.setDate(poultryEnd.getDate()+active.poultry);
+  const firstSpecies=active.species.split('→')[0].trim();
+  document.getElementById('activePodBody').innerHTML=`
+    <div class="active-hero">
+      <div class="pod-id">Pod ${active.pod}<span class="zone">— ${active.zone}</span></div>
+      <div class="badge s-Grazing">● Status: Grazing (cycle 2 starts today)</div>
+      <div class="row"><span>Species in pod today</span><b>${firstSpecies}</b></div>
+      <div class="row"><span>Full sequence</span><b>${active.species}</b></div>
+      <div class="row"><span>Entry height target</span><b>${active.entryHt}</b></div>
+      <div class="row"><span>Residual target</span><b>${active.exitRes}</b></div>
+      <div class="row"><span>Grazing window</span><b>${fmt(grazeStart)} → ${fmt(grazeEnd)}</b></div>
+      <div class="decision">📋 Today's decision: <span style="color:var(--bright-green)">MOVE livestock in</span> — measure height first, then open the gate.</div>
+    </div>`;
+}
+
+/* ---------- 2. Next Pod Queue ---------- */
+function renderQueue(){
+  const ready=PODS.filter(p=>p.status==='GrazeReady');
+  const next=ready.slice(1,6); // skip the active one
+  document.getElementById('queueBody').innerHTML=next.map(p=>{
+    // simulate last measurement (no real data -> "No Data")
+    const ht='No Data';
+    const readyFlag = p.daysSince>=p.rest ? '✅' : '⚠️';
+    const note = p.daysSince>Math.ceil(p.rest*1.5) ? '⚠️ Over-rest risk' : (p.daysSince<p.rest?'⏳ Rest days not met':'Ready');
+    return `<tr style="cursor:pointer" onclick="podModal(${p.pod})">
+      <td><b>${p.pod}</b></td><td>${p.zone}</td>
+      <td>${fmt(addDays(TODAY,0))}</td><td>${ht}</td>
+      <td class="${readyFlag==='✅'?'flag-ok':'flag-warn'}">${readyFlag}</td>
+      <td style="white-space:normal;max-width:180px;color:var(--muted);font-size:11.5px">${note}</td></tr>`;
+  }).join('');
+}
+
+/* ---------- 3. Poultry ---------- */
+function renderPoultry(){
+  const active=PODS.find(p=>p.status==='GrazeReady');
+  const grazeEnd=new Date(TODAY); grazeEnd.setDate(grazeEnd.getDate()+active.graze-1);
+  const poultryStart=new Date(grazeEnd); poultryStart.setDate(poultryStart.getDate()+1);
+  const poultryEnd=new Date(poultryStart); poultryEnd.setDate(poultryEnd.getDate()+active.poultry);
+  const exitBy=new Date(poultryEnd);
+  const nextPoultryPod=PODS.filter(p=>p.status==='GrazeReady')[1];
+  document.getElementById('poultryBody').innerHTML=`
+    <div class="poultry-block">
+      <div class="row"><span>Current poultry pod</span><b>Pod ${active.pod} (${active.zone})</b></div>
+      <div class="row"><span>Entry date/time</span><b>${fmt(poultryStart)} · 06:00</b></div>
+      <div class="row"><span>Required exit by</span><b>${fmt(exitBy)} (regrowth &lt; 2")</b></div>
+      <div class="row"><span>Next poultry pod</span><b>Pod ${nextPoultryPod?nextPoultryPod.pod:'—'} (${nextPoultryPod?nextPoultryPod.zone:'—'})</b></div>
+      <div class="alert warn" style="margin-top:8px">⚠️ Alert: regrowth must be checked — exit BEFORE fresh tillers exceed 2" to avoid trampling new growth.</div>
+      <div class="alert ok">✅ Poultry enters 24–72 hr post-cattle exit: breaks pats, controls flies, injects bio-available N.</div>
+    </div>`;
+}
+
+/* ---------- 4. Pod Grid ---------- */
+function renderPodGrid(){
+  document.getElementById('podGrid').innerHTML=PODS.map(p=>{
+    const plant=new Date(p.plant);
+    const nextReady=new Date(plant); nextReady.setDate(nextReady.getDate()+p.growth+p.graze+p.rest);
+    const isAlert = p.zone==='Stockpile'&&!p.seedOrdered;
+    return `<div class="pod-card ${isAlert?'alert':''}" onclick="podModal(${p.pod})">
+      <div class="pnum">${p.pod} <span style="font-size:10px;color:var(--muted);font-weight:400">${p.acres}ac</span></div>
+      <div class="pzone">${p.zone}</div>
+      <span class="pstatus ${p.cls}">${p.status}</span>
+      <div class="pmeta">Entry: ${p.entryHt}</div>
+      <div class="pmeta">Rest req: ${p.rest}d</div>
+      <div class="pmeta">Next ready: ${p.status==='Ready to Plant'?'(planted '+fmt(plant)+')':fmt(nextReady)}</div>
+      ${p.seedOrdered?'':`<div class="pmeta" style="color:var(--red)">⚠ Seed not ordered</div>`}
+    </div>`;
+  }).join('');
+}
+
+/* ---------- 5. Alerts ---------- */
+function renderAlerts(){
+  const alerts=[];
+  PODS.forEach(p=>{
+    if(p.zone==='Stockpile'&&!p.seedOrdered) alerts.push({pod:p,sev:'red',t:'Seed not ordered',d:`Pod ${p.pod} (${p.zone}) — ${p.seed} lbs needed before ${fmt(new Date(p.plant))} planting window.`});
+    if(p.zone==='Sacrifice'&&!p.seedOrdered) alerts.push({pod:p,sev:'red',t:'Seed not ordered',d:`Pod ${p.pod} (${p.zone}) — ${p.seed} lbs needed before ${fmt(new Date(p.plant))} fall planting.`});
+    if(p.status==='GrazeReady'&&p.daysSince>Math.ceil(p.rest*1.6)) alerts.push({pod:p,sev:'purple',t:'Over-rest risk',d:`Pod ${p.pod} recovered ${p.daysSince}d ago (rest target ${p.rest}d). Forage may be over-mature — consider grazing.`});
+  });
+  // synthetic: pods not yet planted but window approaching
+  PODS.filter(p=>p.zone==='Stockpile').forEach(p=>{
+    const plant=new Date(p.plant); const daysToPlant=Math.floor((plant-TODAY)/86400000);
+    if(daysToPlant>0&&daysToPlant<40) alerts.push({pod:p,sev:'blue',t:'Planting window approaching',d:`Pod ${p.pod} (${p.zone}) plants in ${daysToPlant}d (${fmt(plant)}). Seed ${p.seedOrdered?'':'NOT ' }ordered.`});
+  });
+  if(!alerts.length){document.getElementById('alertsBody').innerHTML='<div style="color:var(--muted)">No active alerts — all systems nominal.</div>';return;}
+  document.getElementById('alertsBody').innerHTML=alerts.map(a=>
+    `<div class="alert-item sev-${a.sev}" onclick="podModal(${a.pod.pod})"><div class="at">Pod ${a.pod.pod} · ${a.t}</div><div class="ad">${a.d}</div></div>`).join('');
+}
+
+/* ---------- 6. Gantt ---------- */
+function renderGantt(){
+  const days=14; let html=`<div class="gantt-axis"><div></div>`;
+  for(let i=0;i<days;i++){const d=addDays(TODAY,i);html+=`<div>${d.getDate()}/${d.getMonth()+1}</div>`;}
+  html+='</div>';
+  // schedule: GrazeReady pods graze sequentially from today, then poultry, then recovery
+  const ready=PODS.filter(p=>p.status==='GrazeReady');
+  let cursor=0;
+  PODS.forEach(p=>{
+    html+=`<div class="gantt-row"><div class="gantt-label">P${p.pod}</div>`;
+    let cells='';
+    if(p.status==='GrazeReady'){
+      const idx=ready.indexOf(p);
+      const startDay=idx*p.graze; // sequential
+      const grazeEndDay=startDay+p.graze;
+      const poultryStart=grazeEndDay, poultryEnd=poultryStart+p.poultry;
+      // grazing bar
+      if(startDay<days) cells+=bar(startDay,grazeEndDay,'bar-graze','Graze');
+      if(p.poultry>0&&poultryStart<days) cells+=bar(poultryStart,poultryEnd,'bar-poultry','Hen');
+      if(grazeEndDay<days) cells+=bar(grazeEndDay,days,'bar-recovery',''); // recovery onward
+    } else {
+      // Ready to Plant -> rest/standby, mark planting date if within 14d
+      const plant=new Date(p.plant); const pDay=Math.floor((plant-TODAY)/86400000);
+      if(pDay>=0&&pDay<days) cells+=bar(pDay,Math.min(pDay+1,days),'bar-rest','Plant');
+      else cells+=bar(0,days,'bar-rest','');
+    }
+    html+=cells;
+    // fill empty cell backgrounds
+    for(let i=0;i<days;i++){ /* grid handles */ }
+    html+=`</div>`;
+  });
+  document.getElementById('gantt').innerHTML=html;
+}
+function bar(start,end,cls,label){
+  if(end<=start)return'';
+  start=Math.max(0,start); end=Math.min(14,end);
+  if(end<=0||start>=14)return'';
+  const gridStart=start+1, gridEnd=end+1;
+  return `<div class="bar ${cls}" style="grid-column:${gridStart}/${gridEnd};align-self:center">${label}</div>`;
+}
+
+/* ---------- 7. Seed ---------- */
+function renderSeed(){
+  const zones={};
+  PODS.forEach(p=>{zones[p.zone]=zones[p.zone]||{pods:0,acres:0,seed:0,ordered:0,needed:0};zones[p.zone].pods++;zones[p.zone].acres+=p.acres;zones[p.zone].seed+=p.seed;zones[p.zone].needed+=p.seed;if(p.seedOrdered)zones[p.zone].ordered+=p.seed;});
+  let html=''; let totalNeed=0,totalOrdered=0;
+  for(const z in zones){const v=zones[z];totalNeed+=v.seed;totalOrdered+=v.ordered;
+    const miss=v.needed-v.ordered;
+    html+=`<div class="seed-zone">
+      <div class="zh"><span>${z} <span style="color:var(--muted);font-weight:400;font-size:11px">· ${v.pods} pods</span></span><span>${v.seed} lbs</span></div>
+      <div class="zmeta">${v.acres} acres · ordered ${v.ordered} lbs ${miss>0?`· <span style="color:var(--red)">${miss} lbs missing</span>`:'· ✅ ordered'}</div>
+      <div class="bar-wrap"><div class="bar-fill ${miss>0?'miss':''}" style="width:${(v.ordered/v.needed*100)}%"></div></div>
+    </div>`;}
+  html+=`<div class="seed-zone"><div class="zh"><span>TOTAL</span><span>${totalNeed} lbs</span></div><div class="zmeta">Ordered ${totalOrdered} · Outstanding ${totalNeed-totalOrdered} lbs</div></div>`;
+  document.getElementById('seedBody').innerHTML=html;
+}
+
+/* ---------- 8. Checklist ---------- */
+const CHECKS=['Measure: active pod height + residual','Move livestock: per species sequence','Set back-fence: behind yesterday\'s graze','Move poultry: per 24–72 hr rule','Update Pod Master: status, notes, overrides','Review alerts: recovery, drought, replant'];
+function renderChecklist(){
+  const saved=JSON.parse(localStorage.getItem('ngapori_checks')||'{}');
+  document.getElementById('checklist').innerHTML=CHECKS.map((c,i)=>
+    `<div class="check-item ${saved[i]?'done':''}" onclick="toggleCheck(${i},this)"><div class="box">✓</div><div class="label">${c}</div></div>`).join('');
+  // reset daily
+  const lastDate=localStorage.getItem('ngapori_check_date');
+  const todayStr=TODAY.toISOString().slice(0,10);
+  if(lastDate!==todayStr){localStorage.removeItem('ngapori_checks');localStorage.setItem('ngapori_check_date',todayStr);renderChecklist();}
+}
+function toggleCheck(i,el){const saved=JSON.parse(localStorage.getItem('ngapori_checks')||'{}');saved[i]=!saved[i];localStorage.setItem('ngapori_checks',JSON.stringify(saved));el.classList.toggle('done');}
+
+/* ---------- Helpers ---------- */
+function fmt(d){return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
+function podModal(n){
+  const p=PODS.find(x=>x.pod===n); const plant=new Date(p.plant);
+  const gr=new Date(plant); gr.setDate(gr.getDate()+p.growth);
+  document.getElementById('modalContent').innerHTML=`
+    <span class="mclose" onclick="document.getElementById('modalBg').classList.remove('show')">✕</span>
+    <h3>Pod ${p.pod} — ${p.zone}</h3>
+    <div class="row"><span>Species sequence</span><b>${p.species}</b></div>
+    <div class="row"><span>Acres</span><b>${p.acres}</b></div>
+    <div class="row"><span>Seed rate</span><b>${p.seedRate} lb/ac (${p.seed} lbs)</b></div>
+    <div class="row"><span>Entry / Exit height</span><b>${p.entryHt} / ${p.exitRes}</b></div>
+    <div class="row"><span>Plant date</span><b>${fmt(plant)}</b></div>
+    <div class="row"><span>Growth days</span><b>${p.growth} → GrazeReady ${fmt(gr)}</b></div>
+    <div class="row"><span>Graze / Rest</span><b>${p.graze}d / ${p.rest}d</b></div>
+    <div class="row"><span>Status</span><span class="badge ${p.cls}">${p.status}</span></div>
+    <div class="row"><span>Seed ordered</span><b style="color:${p.seedOrdered?'var(--green)':'var(--red)'}">${p.seedOrdered?'Yes':'NO'}</b></div>
+    <div class="row"><span>Poultry window</span><b>${p.poultry>0?p.poultry+'d post-graze':'n/a (sacrifice)'}</b></div>`;
+  document.getElementById('modalBg').classList.add('show');
+}
+function closeModal(e){if(e.target.id==='modalBg')e.target.classList.remove('show');}
+function downloadSelf(){
+  const html='<!DOCTYPE html>\n'+document.documentElement.outerHTML;
+  const blob=new Blob([html],{type:'text/html'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ngapori-dashboard.html';a.click();
+}
+
+/* ---------- Init ---------- */
+document.getElementById('tDate').textContent=fmt(TODAY);
+renderActive();renderQueue();renderPoultry();renderPodGrid();renderAlerts();renderGantt();renderSeed();renderChecklist();
+</script>
+</body>
+</html>
