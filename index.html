@@ -143,9 +143,33 @@
   .modal .mclose{float:right;cursor:pointer;color:var(--muted)}
   @media(max-width:1080px){.grid{grid-template-columns:1fr}}
   @media(max-width:640px){.pod-grid{grid-template-columns:repeat(2,1fr)}}
+  /* ---------- Auth ---------- */
+  .login-overlay{position:fixed;inset:0;background:rgba(6,9,13,.88);display:flex;align-items:center;justify-content:center;z-index:100}
+  .login-overlay.hide{display:none}
+  .login-box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px;width:320px;max-width:90vw}
+  .login-box h2{font-size:16px;margin-bottom:4px}
+  .login-box p{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+  .login-box label{display:block;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:10px 0 4px}
+  .login-box input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 10px;font-size:13px}
+  .login-err{color:var(--red);font-size:12px;min-height:16px;margin-top:8px}
+  .userbadge{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .userbadge b{color:var(--ink)}
+  .role-pill{padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
 </style>
 </head>
 <body>
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>🔒 Sign in</h2>
+    <p>This keeps casual visitors out and attributes every log entry. Ask a manager if you don't have a PIN.</p>
+    <label>Name</label>
+    <input type="text" id="login_name" autocomplete="username" placeholder="e.g. Alex">
+    <label>PIN</label>
+    <input type="password" inputmode="numeric" id="login_pin" autocomplete="current-password" placeholder="••••" onkeydown="if(event.key==='Enter')doLogin()">
+    <div class="login-err" id="loginErr"></div>
+    <button class="btn green" style="width:100%;margin-top:12px" onclick="doLogin()">Sign In</button>
+  </div>
+</div>
 <div class="wrap">
   <header class="top">
     <h1>🌱 Ngapori Ranch — Forage & Rotational Grazing Dashboard
@@ -160,6 +184,11 @@
       <button class="btn green" onclick="openLogModal()">📝 Log Field Entry</button>
       <button class="btn ghost" id="refreshBtn" onclick="loadAll()">↻ Refresh</button>
       <button class="btn" onclick="downloadSelf()">⬇ Download this dashboard</button>
+      <div class="userbadge" id="userBadge" style="display:none">
+        <span>👤 <b id="ub_name"></b></span>
+        <span class="role-pill" id="ub_role"></span>
+        <button class="btn ghost" onclick="doLogout()" style="padding:4px 10px;font-size:11px">Sign out</button>
+      </div>
     </div>
   </header>
   <div id="loadError"></div>
@@ -220,6 +249,58 @@ const SHEETS = {
   zoneconfig:"https://docs.google.com/spreadsheets/d/e/2PACX-1vRGqbocCIRer9iDmj3e__tcat4cwRbvVIiuJ4hn0Yasxjng5T7X9WOviHe3V3vj78c5q7SiVsHBMYXY/pub?gid=1616014200&single=true&output=csv"
 };
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4wUWncukgW93QdkE2f08ocbOpdqQpxW7q3N51PvQivFkOOuliAAULtyiRwLcDNZfow/exec";
+
+/* ---------- Auth ----------
+   Same server-side check as the entry console: name+PIN against a private
+   Users tab in Code.gs, returning a signed session token. This page stores
+   it and sends it with every field-log write; Code.gs re-verifies it and
+   reads the role from the token, never from anything the page claims. */
+const SESSION_KEY = 'ngapori_session';
+function getSession(){
+  try{
+    const raw = localStorage.getItem(SESSION_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    if(!s.token || !s.exp || Date.now() > s.exp){ localStorage.removeItem(SESSION_KEY); return null; }
+    return s;
+  }catch(e){ return null; }
+}
+function setSession(s){ localStorage.setItem(SESSION_KEY, JSON.stringify(s)); }
+function clearSession(){ localStorage.removeItem(SESSION_KEY); }
+function requireLogin(){
+  const s = getSession();
+  const overlay=document.getElementById('loginOverlay'), badge=document.getElementById('userBadge');
+  if(s){
+    overlay.classList.add('hide'); badge.style.display='flex';
+    document.getElementById('ub_name').textContent=s.name;
+    document.getElementById('ub_role').textContent=s.role;
+  } else {
+    overlay.classList.remove('hide'); badge.style.display='none';
+  }
+  return s;
+}
+async function doLogin(){
+  const name=document.getElementById('login_name').value.trim();
+  const pin=document.getElementById('login_pin').value.trim();
+  const errEl=document.getElementById('loginErr');
+  errEl.textContent='';
+  if(!name||!pin){ errEl.textContent='Enter both name and PIN.'; return; }
+  try{
+    const res=await fetch(APPS_SCRIPT_URL,{
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({login:true,name,pin})
+    });
+    const data=await res.json();
+    if(!data.ok){ errEl.textContent=data.error||'Sign-in failed.'; return; }
+    setSession({name:data.name, role:data.role, token:data.token, exp:Date.now()+(data.expiresInHours||12)*3600*1000});
+    document.getElementById('login_pin').value='';
+    requireLogin();
+  }catch(err){
+    errEl.textContent='Could not reach the server — check your connection.';
+  }
+}
+function doLogout(){ clearSession(); requireLogin(); }
 
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
 let PODS = [];
@@ -575,7 +656,7 @@ function logFormHTML(prefillPod){
         <option value="graze_start">Graze Start</option>
         <option value="graze_end">Graze End</option>
         <option value="poultry">Poultry Move</option>
-        <option value="override">Manual Override</option>
+        <option value="override" id="m_action_override">Manual Override</option>
         <option value="note">Note</option>
       </select></div>
     </div>
@@ -616,19 +697,40 @@ function updateMActionFields(){
   const v = val('m_action');
   document.querySelectorAll('.honly').forEach(el=>el.classList.toggle('show', el.dataset.mfor===v));
 }
+/** Hides the Manual Override option from the action dropdown for roles that can't use it
+ *  (server enforces this too — this is just so Workers don't see an option they can't submit). */
+function applyRoleGatingToLogForm(){
+  const session=getSession();
+  const canOverride = !!session && (session.role==='Manager'||session.role==='Founder');
+  const opt=document.getElementById('m_action_override');
+  if(opt) opt.style.display = canOverride ? '' : 'none';
+  const sel=document.getElementById('m_action');
+  if(sel && !canOverride && sel.value==='override'){ sel.value='measure'; updateMActionFields(); }
+}
 async function submitLog(e){
   e.preventDefault();
+  const session=requireLogin();
+  if(!session){ document.getElementById('m_status').textContent='✗ Please sign in first.'; document.getElementById('m_status').classList.add('err'); return; }
+  const action=val('m_action');
+  if(action==='override' && !(session.role==='Manager'||session.role==='Founder')){
+    document.getElementById('m_status').textContent='✗ Only Managers/Founders can set overrides.'; document.getElementById('m_status').classList.add('err'); return;
+  }
   const btn=document.getElementById('m_submit'), statusEl=document.getElementById('m_status');
   const podNum = val('m_pod');
   const p = PODS.find(x=>String(x.pod)===String(podNum));
   const payload={
     id:'log_'+Date.now(), date:val('m_date'), pod:podNum, zone:p?p.zone:'',
-    action:val('m_action'), pre:val('m_pre'), post:val('m_post'), dm:val('m_dm'), sm:val('m_sm'), weed:val('m_weed'),
+    action:action, pre:val('m_pre'), post:val('m_post'), dm:val('m_dm'), sm:val('m_sm'), weed:val('m_weed'),
     species:val('m_species'), grazedays:'', backfence:val('m_backfence'),
-    paction:val('m_paction'), exitby:val('m_exitby'), override:val('m_override'), status:'', notes:val('m_notes')
+    paction:val('m_paction'), exitby:val('m_exitby'), override:val('m_override'), status:'', notes:val('m_notes'),
+    token:session.token
   };
   btn.disabled=true; btn.textContent='Submitting…'; statusEl.textContent=''; statusEl.className='mstatus';
   try{
+    // NOTE: kept as no-cors (as before) so this avoids an Apps Script CORS
+    // preflight — the trade-off is the browser can't read the response, so a
+    // server-side rejection (e.g. an expired token) fails silently here. The
+    // entry console reads real responses if you need visible error feedback.
     await fetch(APPS_SCRIPT_URL, {
       method:'POST', mode:'no-cors',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
@@ -664,13 +766,16 @@ function podModal(n){
     ${logFormHTML(p.pod)}`;
   document.getElementById('modalBg').classList.add('show');
   updateMActionFields();
+  applyRoleGatingToLogForm();
 }
 function openLogModal(){
+  if(!requireLogin()) return;
   document.getElementById('modalContent').innerHTML =
     `<span class="mclose" onclick="document.getElementById('modalBg').classList.remove('show')">✕</span>
      <h3>📝 New Field Log Entry</h3>${logFormHTML(PODS.length?PODS[0].pod:null)}`;
   document.getElementById('modalBg').classList.add('show');
   updateMActionFields();
+  applyRoleGatingToLogForm();
 }
 function closeModal(e){ if(e.target.id==='modalBg') e.target.classList.remove('show'); }
 function downloadSelf(){
@@ -707,6 +812,7 @@ async function loadAll(){
   }
 }
 document.getElementById('tDate').textContent = fmt(TODAY);
+requireLogin();
 loadAll();
 renderActive();renderQueue();renderPoultry();renderPodGrid();renderAlerts();renderGantt();renderSeed();renderChecklist();
 </script>
